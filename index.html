@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikan's Zero-G</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0d1a; overflow: hidden;
+    font-family: system-ui, "Hiragino Sans", sans-serif; }
+  #game { display: block; margin: 0 auto; }
+  .wrap { position: relative; height: 100%; display: flex; align-items: center; justify-content: center; }
+</style>
+</head>
+<body>
+<div class="wrap"><canvas id="game" width="840" height="600"></canvas></div>
+<script>
+/* Mikan's Zero-G — a tiny zero-gravity cat game.
+   Help Mikan collect stars in orbit. Everything drawn in canvas. */
+const cv = document.getElementById('game');
+const X = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+
+// ---------- audio (procedural bleeps) ----------
+let AC = null;
+function beep(freq, dur = 0.09, vol = 0.15, type = 'sine') {
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + dur);
+    o.connect(g); g.connect(AC.destination);
+    o.start(); o.stop(AC.currentTime + dur);
+  } catch (e) {}
+}
+
+// ---------- state ----------
+let state = 'start'; // start | play | win | over
+let t = 0;
+const keys = {};
+let mikan, stars, rocks, score, lives, shakeT, msg;
+
+function reset() {
+  mikan = { x: W * 0.2, y: H * 0.5, vx: 0, vy: 0, r: 34, hurt: 0, tilt: 0 };
+  stars = []; rocks = [];
+  for (let i = 0; i < 6; i++) spawnStar();
+  for (let i = 0; i < 4; i++) spawnRock();
+  score = 0; lives = 3; shakeT = 0; msg = '';
+}
+function spawnStar() {
+  stars.push({
+    x: 80 + Math.random() * (W - 160),
+    y: 80 + Math.random() * (H - 160),
+    r: 14, ph: Math.random() * 6
+  });
+}
+function spawnRock() {
+  const side = Math.floor(Math.random() * 4);
+  const sp = 0.6 + Math.random() * 0.9;
+  let x, y, vx, vy;
+  if (side === 0) { x = -40; y = Math.random() * H; vx = sp; vy = (Math.random() - 0.5) * 0.5; }
+  else if (side === 1) { x = W + 40; y = Math.random() * H; vx = -sp; vy = (Math.random() - 0.5) * 0.5; }
+  else if (side === 2) { x = Math.random() * W; y = -40; vx = (Math.random() - 0.5) * 0.5; vy = sp; }
+  else { x = Math.random() * W; y = H + 40; vx = (Math.random() - 0.5) * 0.5; vy = -sp; }
+  rocks.push({ x, y, vx, vy, r: 16 + Math.random() * 16, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.04 });
+}
+
+// ---------- input ----------
+addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if ((e.key === ' ' || e.key === 'Enter') && state !== 'play') {
+    reset(); state = 'play'; beep(660, .08);
+  }
+});
+addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+cv.addEventListener('click', () => {
+  if (state !== 'play') { reset(); state = 'play'; beep(660, .08); }
+});
+
+// ---------- cat rendering (reused style from Mikan's Corner) ----------
+function drawCat(x, y, r, tilt, hurt) {
+  X.save(); X.translate(x, y); X.rotate(tilt);
+  const s = r / 24;
+  const O = hurt ? '#f7d354' : '#f7a354', D = '#de7c3c', C = '#ffe7c4', K = '#3d2b26', P = '#f7a8a8';
+  const R = (rx, ry, rw, rh, col) => { X.fillStyle = col; X.fillRect((rx - 24) * s, (ry - 24) * s, rw * s, rh * s); };
+  // body (round-ish)
+  R(6, 8, 38, 30, O);
+  // head
+  R(2, -16, 46, 36, O);
+  // ears
+  R(-4, -24, 14, 12, O); R(38, -24, 14, 12, O);
+  R(0, -21, 7, 7, P); R(40, -21, 7, 7, P);
+  // eyes
+  R(12, -4, 9, 6, K); R(29, -4, 9, 6, K);
+  // nose + muzzle
+  R(21, 5, 6, 4, P); R(15, 10, 18, 8, C);
+  // mouth
+  R(19, 12, 3, 2, K); R(24, 12, 3, 2, K);
+  // whiskers
+  R(-6, 8, 10, 1, '#e8dcc8'); R(-6, 13, 10, 1, '#e8dcc8');
+  R(46, 8, 10, 1, '#e8dcc8'); R(46, 13, 10, 1, '#e8dcc8');
+  // stripes
+  R(12, -21, 5, 6, D); R(23, -22, 5, 7, D); R(34, -21, 5, 6, D);
+  // tail
+  X.beginPath(); X.strokeStyle = O; X.lineWidth = 7 * s; X.lineCap = 'round';
+  X.moveTo(42 * s - 18 * s, 26 * s - 24 * s);
+  X.quadraticCurveTo((60 - 24) * s, (18 - 24) * s, (54 - 24) * s, (-6 - 24) * s);
+  X.stroke();
+  // paws
+  R(10, 36, 12, 8, O); R(28, 36, 12, 8, O);
+  X.restore();
+}
+
+// ---------- update ----------
+function update() {
+  t++;
+  if (state !== 'play') { shakeT = Math.max(0, shakeT - 1); return; }
+  if (shakeT > 0) shakeT--;
+  const acc = 0.14, drag = 0.995, maxv = 4.6;
+  if (keys['arrowleft'] || keys['a']) mikan.vx -= acc;
+  if (keys['arrowright'] || keys['d']) mikan.vx += acc;
+  if (keys['arrowup'] || keys['w']) mikan.vy -= acc;
+  if (keys['arrowdown'] || keys['s']) mikan.vy += acc;
+  mikan.vx *= drag; mikan.vy *= drag;
+  mikan.vx = Math.max(-maxv, Math.min(maxv, mikan.vx));
+  mikan.vy = Math.max(-maxv, Math.min(maxv, mikan.vy));
+  mikan.x += mikan.vx; mikan.y += mikan.vy;
+  mikan.tilt = mikan.vx * 0.06;
+  // walls bounce
+  if (mikan.x < mikan.r) { mikan.x = mikan.r; mikan.vx = Math.abs(mikan.vx) * 0.7; }
+  if (mikan.x > W - mikan.r) { mikan.x = W - mikan.r; mikan.vx = -Math.abs(mikan.vx) * 0.7; }
+  if (mikan.y < mikan.r) { mikan.y = mikan.r; mikan.vy = Math.abs(mikan.vy) * 0.7; }
+  if (mikan.y > H - mikan.r) { mikan.y = H - mikan.r; mikan.vy = -Math.abs(mikan.vy) * 0.7; }
+  if (mikan.hurt > 0) mikan.hurt--;
+  // stars
+  for (const st of stars) st.ph += 0.05;
+  for (let i = stars.length - 1; i >= 0; i--) {
+    const st = stars[i];
+    const d = Math.hypot(st.x - mikan.x, st.y - mikan.y);
+    if (d < st.r + mikan.r * 0.8) {
+      score++;
+      beep(880 + score * 40, .1, .18);
+      stars.splice(i, 1); spawnStar();
+      if (stars.length < 7 && Math.random() < .6) spawnStar();
+      if (score >= 15) { state = 'win'; beep(1046, .3, .2); }
+    }
+  }
+  // rocks
+  for (const rk of rocks) {
+    rk.x += rk.vx; rk.y += rk.vy; rk.rot += rk.vr;
+    if (rk.x < -60 || rk.x > W + 60 || rk.y < -60 || rk.y > H + 60) {
+      // recycle from a random edge
+      const side = Math.floor(Math.random() * 4);
+      const sp = 0.6 + Math.random() * 0.9;
+      if (side === 0) { rk.x = -40; rk.y = Math.random() * H; rk.vx = sp; rk.vy = (Math.random() - 0.5) * .5; }
+      else if (side === 1) { rk.x = W + 40; rk.y = Math.random() * H; rk.vx = -sp; rk.vy = (Math.random() - 0.5) * .5; }
+      else if (side === 2) { rk.x = Math.random() * W; rk.y = -40; rk.vx = (Math.random() - 0.5) * .5; rk.vy = sp; }
+      else { rk.x = Math.random() * W; rk.y = H + 40; rk.vx = (Math.random() - 0.5) * .5; rk.vy = -sp; }
+    }
+    const d = Math.hypot(rk.x - mikan.x, rk.y - mikan.y);
+    if (d < rk.r + mikan.r * 0.75 && mikan.hurt <= 0) {
+      lives--; mikan.hurt = 90; shakeT = 18;
+      beep(140, .25, .22, 'sawtooth');
+      // knockback
+      const a = Math.atan2(mikan.y - rk.y, mikan.x - rk.x);
+      mikan.vx += Math.cos(a) * 5; mikan.vy += Math.sin(a) * 5;
+      if (lives <= 0) { state = 'over'; beep(98, .5, .2, 'sawtooth'); }
+    }
+  }
+}
+
+// ---------- draw ----------
+function star5(cx, cy, r, col) {
+  X.fillStyle = col; X.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 === 0 ? r : r * 0.45;
+    const a = (Math.PI / 5) * i - Math.PI / 2;
+    X[i === 0 ? 'moveTo' : 'lineTo'](cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+  }
+  X.closePath(); X.fill();
+}
+function draw() {
+  const sx = shakeT > 0 ? (Math.random() - 0.5) * 6 : 0;
+  const sy = shakeT > 0 ? (Math.random() - 0.5) * 6 : 0;
+  X.save(); X.translate(sx, sy);
+  // space
+  X.fillStyle = '#0b0d1a'; X.fillRect(-10, -10, W + 20, H + 20);
+  for (let i = 0; i < 70; i++) {
+    const px = (i * 137 + t * (0.1 + (i % 5) * 0.02)) % W;
+    const py = (i * 89) % H;
+    X.fillStyle = 'rgba(255,255,255,' + (0.25 + (i % 3) * 0.2) + ')';
+    X.fillRect(px, py, 2, 2);
+  }
+  // earth-ish glow corner
+  const gr = X.createRadialGradient(W - 40, H + 60, 10, W - 40, H + 60, 260);
+  gr.addColorStop(0, 'rgba(60,120,220,.22)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  X.fillStyle = gr; X.fillRect(0, 0, W, H);
+
+  // stars
+  for (const st of stars) {
+    X.save(); X.translate(st.x, st.y); X.rotate(Math.sin(st.ph) * 0.3);
+    star5(0, 0, st.r + Math.sin(st.ph) * 2, '#f7c948');
+    X.restore();
+  }
+  // rocks
+  for (const rk of rocks) {
+    X.save(); X.translate(rk.x, rk.y); X.rotate(rk.rot);
+    X.fillStyle = '#5a5470';
+    X.beginPath();
+    for (let i = 0; i < 7; i++) {
+      const a = (Math.PI * 2 / 7) * i;
+      const rr = rk.r * (0.8 + ((i * 37) % 10) / 25);
+      X[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    X.closePath(); X.fill();
+    X.fillStyle = '#453f58';
+    X.beginPath(); X.arc(-rk.r * 0.25, -rk.r * 0.2, rk.r * 0.22, 0, 7); X.fill();
+    X.restore();
+  }
+  // mikan (blink hurt)
+  if (!(mikan.hurt > 0 && Math.floor(t / 4) % 2 === 0)) {
+    drawCat(mikan.x, mikan.y, mikan.r, mikan.tilt, mikan.hurt > 0);
+  }
+  X.restore();
+
+  // HUD
+  X.fillStyle = '#eae6f2'; X.font = '700 20px system-ui';
+  X.fillText('★ ' + score + ' / 15', 18, 34);
+  for (let i = 0; i < 3; i++) {
+    X.globalAlpha = i < lives ? 1 : 0.2;
+    X.font = '22px serif'; X.fillText('♥', W - 40 - i * 30, 36);
+    X.globalAlpha = 1;
+  }
+  X.fillStyle = '#8b93a8'; X.font = '13px system-ui';
+  X.fillText('arrows / WASD to drift', 18, H - 16);
+
+  if (state === 'start') {
+    overlay('Mikan\'s Zero-G', 'Mikan is floating in orbit. Collect 15 stars — watch the asteroids!', 'press SPACE to launch');
+  } else if (state === 'win') {
+    overlay('Mission complete! 🎉', 'Mikan collected all 15 stars. She is extremely proud.', 'press SPACE to fly again');
+  } else if (state === 'over') {
+    overlay('Ouch!', 'The asteroids won this round. Mikan is fine, just dizzy.', 'press SPACE to retry');
+  }
+}
+function overlay(title, sub, hint) {
+  X.fillStyle = 'rgba(8,10,20,.72)'; X.fillRect(0, 0, W, H);
+  X.textAlign = 'center';
+  X.fillStyle = '#f7a354'; X.font = '800 40px system-ui';
+  X.fillText(title, W / 2, H / 2 - 50);
+  X.fillStyle = '#eae6f2'; X.font = '17px system-ui';
+  X.fillText(sub, W / 2, H / 2 + 4);
+  X.fillStyle = '#8b93a8'; X.font = '15px system-ui';
+  X.fillText(hint, W / 2, H / 2 + 52);
+  X.textAlign = 'left';
+}
+
+// ---------- loop ----------
+reset();
+(function loop() { update(); draw(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>
